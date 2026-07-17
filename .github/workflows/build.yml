@@ -2,26 +2,20 @@ name: Build
 
 on:
   push:
-    branches: [master]
   pull_request:
 
 jobs:
-  - name: Install Linux dependencies
-  if: runner.os == 'Linux'
-  run: |
-    sudo apt-get update
-    sudo apt-get install -y libasound2-dev pkg-config
   build:
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary: ncmprs
+            exe: ncmprs
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary: ncmprs.exe
+            exe: ncmprs.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -32,11 +26,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # - uses: Swatinem/rust-cache@v2
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
 
-      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+          path: target/${{ matrix.target }}/release/${{ matrix.exe }}
