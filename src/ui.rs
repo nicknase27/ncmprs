@@ -137,7 +137,7 @@ impl Widget for &mut App {
 
         let song_items: Vec<ListItem> = song_indexes
             .iter()
-            .map(|&index| ListItem::new(self.library.songs[index].title.clone()))
+            .map(|&index| ListItem::new(format!("{} ({})", self.library.songs[index].title.clone(), format_time(self.library.songs[index].duration.unwrap()))))
             .collect();
 
         let song_list = List::new(song_items)
@@ -157,7 +157,7 @@ impl Widget for &mut App {
         let queue_items: Vec<ListItem> = self
             .queue
             .iter()
-            .map(|&index| ListItem::new(self.library.songs[index].title.as_str()))
+            .map(|&index| ListItem::new(format!("{} ({}))", self.library.songs[index].title.as_str(), format_time(self.library.songs[index].duration.unwrap()))))
             .collect();
 
         let queue_list = List::new(queue_items)
