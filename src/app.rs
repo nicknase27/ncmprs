@@ -297,52 +297,6 @@ impl App {
                 }
             }
         }
-
-        /*
-        if !self.player.is_paused() {
-            self.player.pause();
-
-            self.paused_at = self.player.get_pos().as_secs() as i64;
-            if let Some(client) = self.discord_client.as_mut() {
-                let song = &self.library.songs[self.current_song.unwrap()];
-                //let duration = song.duration.unwrap_or(1.0) as i64;
-                //let artist = &song.artist;
-                let asset = Assets::new();
-                let activity = activity::Activity::new()
-                    .name("NCMPRS")
-                    .details(song.title.clone())
-                    .state("Paused")
-                    .activity_type(activity::ActivityType::Listening)
-                    .assets(asset.large_image("https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/navidrome.png"));
-                let _ = client.set_activity(activity);
-            }
-        } else if self.player.is_paused() {
-            self.player.play();
-            let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-            if let Some(client) = self.discord_client.as_mut() {
-                let song = &self.library.songs[self.current_song.unwrap()];
-                let duration = song.duration.unwrap_or(1.0) as i64;
-                let artist = &song.artist;
-                let timestamps = Timestamps::new()
-            .start(now - self.paused_at)
-            .end((now - self.paused_at) + duration);
-        let asset = Assets::new();
-
-
-        let payload = activity::Activity::new()
-            .name("NCMPRS")
-            .details(song.title.clone())
-            .state(artist)
-            .activity_type(activity::ActivityType::Listening)
-            .timestamps(timestamps)
-            .assets(asset.large_image("https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/navidrome.png"));
-
-        let _ = client.set_activity(payload);
-            }
-        }*/
     }
 
     pub fn inc_volume(&mut self) {
@@ -458,6 +412,18 @@ impl App {
             self.current_song = Some(self.queue.front().unwrap().to_owned());
             self.update_rpc(self.queue.front().unwrap().to_owned());
             self.queue.pop_front();
+        } else if self.player.empty() {
+            if let Some(client) = self.discord_client.as_mut() {
+                let asset = Assets::new();
+                let activity = activity::Activity::new()
+                    .name("NCMPRS")
+                    .state("Idle")
+                    // .activity_type(activity::ActivityType::Listening)
+                    .assets(asset.large_image(
+                        "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/navidrome.png",
+                    ));
+                let _ = client.set_activity(activity);
+            }
         }
     }
 
