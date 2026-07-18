@@ -1,18 +1,18 @@
-use std::fs::{File};
+use std::collections::VecDeque;
+use std::fs::File;
 use std::io::BufReader;
-use std::collections::{VecDeque};
 
 use crate::event::{AppEvent, Event, EventHandler};
 use crate::library::{Library, Song};
 
+use audiotags::{MimeType, Tag};
 use crossterm::event::MediaKeyCode::{self, PlayPause};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use discord_rich_presence::activity::{Assets, Timestamps};
+use discord_rich_presence::{DiscordIpc, DiscordIpcClient, activity};
 use ratatui::DefaultTerminal;
 use ratatui::widgets::{List, ListItem, ListState};
-use rodio::{Decoder};
-use audiotags::{MimeType, Tag};
-use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
+use rodio::Decoder;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -44,6 +44,7 @@ pub struct App {
     pub focus: Focus,
 
     pub current_song: Option<usize>,
+    pub paused_at: i64,
 
     pub discord_client: Option<DiscordIpcClient>,
 
@@ -54,23 +55,22 @@ pub struct App {
 impl App {
     /// Constructs a new instance of [`App`].
     pub fn new() -> Self {
-        let sink_handle = rodio::DeviceSinkBuilder::open_default_sink()
-            .expect("open default audio stream");
+        let sink_handle =
+            rodio::DeviceSinkBuilder::open_default_sink().expect("open default audio stream");
         let player = rodio::Player::connect_new(sink_handle.mixer());
         player.set_volume(1.0);
 
         let discord_client = {
-        let mut client = DiscordIpcClient::new("1525954755292299426");
+            let mut client = DiscordIpcClient::new("1525954755292299426");
 
-    match client.connect() {
-        Ok(_) => Some(client),
-        Err(e) => {
-            eprintln!("Discord RPC unavailable: {e}");
-            None
-        }
-    }
-};
-
+            match client.connect() {
+                Ok(_) => Some(client),
+                Err(e) => {
+                    eprintln!("Discord RPC unavailable: {e}");
+                    None
+                }
+            }
+        };
 
         Self {
             running: true,
@@ -84,11 +84,11 @@ impl App {
             focus: Focus::default(),
             events: EventHandler::new(),
             current_song: None,
+            paused_at: 1,
             sink_handle,
             player,
             discord_client,
         }
-
     }
 
     /// Run the application's main loop.
@@ -119,9 +119,7 @@ impl App {
                     AppEvent::MoveRight => self.move_right(),
                     AppEvent::MoveLeft => self.move_left(),
                     AppEvent::RemoveFromQueue => self.remove_from_queue(),
-                    
-                    
-                    
+
                     AppEvent::Quit => self.quit(),
                 },
             }
@@ -136,14 +134,16 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') => self.events.send(AppEvent::Quit),
             KeyCode::Char('c' | 'C') if key_event.modifiers == KeyModifiers::CONTROL => {
                 self.events.send(AppEvent::Quit)
-            },
+            }
 
             KeyCode::Char('R') => {
                 self.library = Library::scan();
                 self.library.save();
-            },
+            }
 
-            KeyCode::Char('l') | KeyCode::Right  | KeyCode::Tab => self.events.send(AppEvent::MoveRight),
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => {
+                self.events.send(AppEvent::MoveRight)
+            }
             KeyCode::Char('h') | KeyCode::Left => self.events.send(AppEvent::MoveLeft),
 
             KeyCode::Char('j') | KeyCode::Down => match self.focus {
@@ -174,7 +174,9 @@ impl App {
 
             KeyCode::Enter => self.events.send(AppEvent::Play),
             KeyCode::Char('x') => self.stop_playback(),
-            KeyCode::Char(' ') | KeyCode::Media(MediaKeyCode::PlayPause) => self.events.send(AppEvent::PlayPause),
+            KeyCode::Char(' ') | KeyCode::Media(MediaKeyCode::PlayPause) => {
+                self.events.send(AppEvent::PlayPause)
+            }
             KeyCode::Char('+') | KeyCode::Char('=') => self.events.send(AppEvent::IncVolume),
             KeyCode::Char('-') | KeyCode::Char('_') => self.events.send(AppEvent::DecVolume),
             KeyCode::Delete => self.events.send(AppEvent::RemoveFromQueue),
@@ -185,7 +187,7 @@ impl App {
         Ok(())
     }
 
-    /* 
+    /*
     pub fn play(&mut self) {
             let file = File::open(self.songs[self.list_state.selected().expect("None")].clone()).unwrap();
             let source = Decoder::new(BufReader::new(file)).unwrap();
@@ -196,20 +198,29 @@ impl App {
                 self.player.stop();
                 self.player.append(source);
             }
-            
+
     }
     */
     pub fn play(&mut self) {
         if !self.queue.is_empty() {
             for _i in 0..self.queue.len() {
-                let file = File::open(self.library.songs[*self.queue.front().expect("None")].path.clone()).unwrap();
+                let file = File::open(
+                    self.library.songs[*self.queue.front().expect("None")]
+                        .path
+                        .clone(),
+                )
+                .unwrap();
                 let source = Decoder::new(BufReader::new(file)).unwrap();
                 self.queue.pop_front();
                 self.player.append(source);
             }
-            
         } else {
-            let file = File::open(self.library.songs[self.artist_state.selected().expect("None")].path.clone()).unwrap();
+            let file = File::open(
+                self.library.songs[self.artist_state.selected().expect("None")]
+                    .path
+                    .clone(),
+            )
+            .unwrap();
             let source = Decoder::new(BufReader::new(file)).unwrap();
             if self.player.empty() {
                 self.player.append(source);
@@ -225,60 +236,113 @@ impl App {
         let song_index = song_indexes[index];
 
         self.queue.push_back(song_index);
-
     }
 
     pub fn enqueue_album(&mut self) {
-    let song_indexes = self.current_selected_song();
+        let song_indexes = self.current_selected_song();
 
-    for &song in &song_indexes {
-        self.queue.push_back(song);
-    }
-
-    let song = &self.library.songs[song_indexes[0]];
-
-    // We only need to read the tags if we might have to save the artwork.
-    let tag = Tag::default()
-        .read_from_path(&song.path)
-        .expect("Error");
-
-    if let Some(cover) = tag.album_cover() {
-        let extension = match cover.mime_type {
-            MimeType::Png => "png",
-            MimeType::Jpeg => "jpg",
-            _ => "bin",
-        };
-
-        let filename = format!("{} - {}.{}", song.artist, song.album, extension);
-
-        let path = dirs::cache_dir()
-            .unwrap()
-            .join("ncmprs")
-            .join("art")
-            .join(filename);
-
-        if !path.exists() {
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, cover.data).unwrap();
+        for &song in &song_indexes {
+            self.queue.push_back(song);
         }
     }
-}
 
     pub fn current_selected_song(&mut self) -> Vec<usize> {
         let selected_artist = &self.library.artists[self.artist_state.selected().unwrap()];
         let albums = self.library.albums_for_artist(selected_artist);
         let selected_album = &albums[self.album_state.selected().unwrap()];
-        let song_indexes = self.library.songs_for_album(selected_artist, selected_album);
+        let song_indexes = self
+            .library
+            .songs_for_album(selected_artist, selected_album);
         song_indexes.to_owned()
-
     }
 
     pub fn play_pause(&mut self) {
+        if self.current_song().is_some() {
+            let song = &self.library.songs[self.current_song.unwrap()];
+            let duration = song.duration.unwrap_or(1.0) as i64;
+            let artist = &song.artist;
+            if let Some(client) = self.discord_client.as_mut() {
+                if !self.player.is_paused() {
+                    self.player.pause();
+                    self.paused_at = self.player.get_pos().as_secs() as i64;
+
+                    let asset = Assets::new();
+                    let activity = activity::Activity::new()
+                    .name("NCMPRS")
+                    .details(song.title.clone())
+                    .state("Paused")
+                    .activity_type(activity::ActivityType::Listening)
+                    .assets(asset.large_image("https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/navidrome.png"));
+                    let _ = client.set_activity(activity);
+                } else if self.player.is_paused() {
+                    self.player.play();
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64;
+                    let timestamps = Timestamps::new()
+                        .start(now - self.paused_at)
+                        .end((now - self.paused_at) + duration);
+                    let asset = Assets::new();
+
+                    let payload = activity::Activity::new()
+                    .name("NCMPRS")
+                    .details(song.title.clone())
+                    .state(artist)
+                    .activity_type(activity::ActivityType::Listening)
+                    .timestamps(timestamps)
+                    .assets(asset.large_image("https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/navidrome.png"));
+
+                    let _ = client.set_activity(payload);
+                }
+            }
+        }
+
+        /*
         if !self.player.is_paused() {
             self.player.pause();
+
+            self.paused_at = self.player.get_pos().as_secs() as i64;
+            if let Some(client) = self.discord_client.as_mut() {
+                let song = &self.library.songs[self.current_song.unwrap()];
+                //let duration = song.duration.unwrap_or(1.0) as i64;
+                //let artist = &song.artist;
+                let asset = Assets::new();
+                let activity = activity::Activity::new()
+                    .name("NCMPRS")
+                    .details(song.title.clone())
+                    .state("Paused")
+                    .activity_type(activity::ActivityType::Listening)
+                    .assets(asset.large_image("https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/navidrome.png"));
+                let _ = client.set_activity(activity);
+            }
         } else if self.player.is_paused() {
             self.player.play();
-        }
+            let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+            if let Some(client) = self.discord_client.as_mut() {
+                let song = &self.library.songs[self.current_song.unwrap()];
+                let duration = song.duration.unwrap_or(1.0) as i64;
+                let artist = &song.artist;
+                let timestamps = Timestamps::new()
+            .start(now - self.paused_at)
+            .end((now - self.paused_at) + duration);
+        let asset = Assets::new();
+
+
+        let payload = activity::Activity::new()
+            .name("NCMPRS")
+            .details(song.title.clone())
+            .state(artist)
+            .activity_type(activity::ActivityType::Listening)
+            .timestamps(timestamps)
+            .assets(asset.large_image("https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/navidrome.png"));
+
+        let _ = client.set_activity(payload);
+            }
+        }*/
     }
 
     pub fn inc_volume(&mut self) {
@@ -300,11 +364,9 @@ impl App {
         }
     }
 
-
     pub fn skip(&mut self) {
         self.player.skip_one();
         if self.queue.is_empty() {
-
             self.current_song = None;
 
             if let Some(client) = self.discord_client.as_mut() {
@@ -316,19 +378,17 @@ impl App {
     pub fn remove_from_queue(&mut self) {
         if self.queue_state.selected().is_some() {
             self.queue.remove(self.queue_state.selected().unwrap());
-        } 
-        
+        }
     }
 
     pub fn stop_playback(&mut self) {
         self.queue.clear();
         self.player.stop();
         if let Some(client) = self.discord_client.as_mut() {
-                let _ = client.clear_activity();
+            let _ = client.clear_activity();
         }
         self.current_song = None;
     }
-
 
     pub fn move_right(&mut self) {
         match self.focus {
@@ -337,7 +397,6 @@ impl App {
             Focus::Songs => self.focus = Focus::Queue,
             Focus::Queue => self.focus = Focus::Artists,
         }
-
     }
 
     pub fn move_left(&mut self) {
@@ -354,39 +413,35 @@ impl App {
     }
 
     pub fn current_song_title(&self) -> &str {
-        self.current_song()
-            .map(|s| s.title.as_str())
-            .unwrap_or("")
+        self.current_song().map(|s| s.title.as_str()).unwrap_or("")
     }
 
     pub fn update_rpc(&mut self, index: usize) {
-    if let Some(client) = self.discord_client.as_mut() {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        if let Some(client) = self.discord_client.as_mut() {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
 
-        let song = &self.library.songs[index];
-        let duration = song.duration.unwrap_or(1.0) as i64;
-        let artist = &song.artist;
+            let song = &self.library.songs[index];
+            let duration = song.duration.unwrap_or(1.0) as i64;
+            let artist = &song.artist;
 
-        let timestamps = Timestamps::new()
-            .start(now)
-            .end(now + duration);
-        let asset = Assets::new();
+            let timestamps = Timestamps::new().start(now).end(now + duration);
+            let asset = Assets::new();
 
+            let payload = activity::Activity::new()
+                .name("NCMPRS")
+                .details(song.title.clone())
+                .state(artist)
+                .activity_type(activity::ActivityType::Listening)
+                .timestamps(timestamps)
+                .assets(asset.large_image(
+                    "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/navidrome.png",
+                ));
 
-        let payload = activity::Activity::new()
-            .name(song.title.clone())
-            .state(artist)
-            .activity_type(activity::ActivityType::Listening)
-            .timestamps(timestamps)
-            .assets(asset.large_image("https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/navidrome.png"));
-
-        let _ = client.set_activity(payload);
-    }
-        
-        
+            let _ = client.set_activity(payload);
+        }
     }
 
     /// Handles the tick event of the terminal.
@@ -395,11 +450,12 @@ impl App {
     /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
     pub fn tick(&mut self) {
         if self.player.empty() && !self.queue.is_empty() {
-            let file = File::open(&self.library.songs[*self.queue.front().expect("Queue is empty")].path).unwrap();
+            let file =
+                File::open(&self.library.songs[*self.queue.front().expect("Queue is empty")].path)
+                    .unwrap();
             let source = Decoder::new(BufReader::new(file)).unwrap();
             self.player.append(source);
             self.current_song = Some(self.queue.front().unwrap().to_owned());
-            
             self.update_rpc(self.queue.front().unwrap().to_owned());
             self.queue.pop_front();
         }
